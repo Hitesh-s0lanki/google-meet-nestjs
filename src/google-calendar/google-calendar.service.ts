@@ -1,11 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { HttpException, Injectable } from '@nestjs/common';
 import { google } from 'googleapis';
+import { CreateGoogleMeetDto } from './dto/create-google-calendar.dto';
+import { PrismaService } from 'src/prisma.service';
 
 @Injectable()
 export class GoogleCalendarService {
   private oauth2Client;
 
-  constructor() {
+  constructor(
+    private readonly prisma:PrismaService
+  ) {
     this.oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
@@ -13,60 +17,55 @@ export class GoogleCalendarService {
     );
   }
 
-  getAuthUrl() {
-    const scopes = [
-      "https://www.googleapis.com/auth/calendar",
-      "https://www.googleapis.com/auth/calendar.events",
-    ];
+  async createGoogleMeetEvent(createGoogleMeetDto: CreateGoogleMeetDto) {
 
-    return this.oauth2Client.generateAuthUrl({
-      access_type: 'offline',
-      scope: scopes,
-    });
+    const {email,
+      ...info
+     } = createGoogleMeetDto
+
+    const user = await this.prisma.user.findUnique({
+      where:{email}
+    })
+
+    if(!user){
+      return new HttpException("User Not Found!", 400)
+    }
+
+
+    this.oauth2Client.setCredentials({ access_token: user.access_token });
+    const calendar = google.calendar({ version: 'v3', auth: this.oauth2Client });
+
+
+    const startTime = new Date();
+    startTime.setHours(startTime.getHours() + 1);
+    const endTime = new Date(startTime);
+    endTime.setHours(startTime.getHours() + 1);
+
+    const event = {
+      ...info,
+      conferenceData: {
+        createRequest: {
+          requestId: new Date().toISOString(),
+          conferenceSolutionKey: {
+            type: 'hangoutsMeet',
+          },
+        },
+      },
+    };
+
+    try {
+      const response = await calendar.events.insert({
+        auth: this.oauth2Client,
+        calendarId: 'primary',
+        requestBody: event,
+        conferenceDataVersion: 1,
+      });
+
+      console.log('Event created:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('Error creating event:', error);
+      throw error;
+    }
   }
-
-  async getTokens(code: string) {
-    const { tokens } = await this.oauth2Client.getToken(code);
-    console.log(tokens)
-    this.oauth2Client.setCredentials(tokens);
-    return tokens;
-  }
-
-  // async createGoogleMeetEvent(authTokens) {
-  //   this.oauth2Client.setCredentials(authTokens);
-  //   const calendar = google.calendar({ version: 'v3', auth: this.oauth2Client });
-
-  //   const event = {
-  //     summary: 'Google Meet Meeting',
-  //     description: 'A meeting to discuss NestJS integration with Google APIs.',
-  //     start: {
-  //       dateTime: '2024-06-17T10:00:00-07:00',
-  //       timeZone: 'America/Los_Angeles',
-  //     },
-  //     end: {
-  //       dateTime: '2024-06-17T11:00:00-07:00',
-  //       timeZone: 'America/Los_Angeles',
-  //     },
-  //     conferenceData: {
-  //       createRequest: {
-  //         requestId: 'sample123',
-  //         conferenceSolutionKey: {
-  //           type: 'hangoutsMeet',
-  //         },
-  //       },
-  //     },
-  //     attendees: [
-  //       { email: 'attendee1@example.com' },
-  //       { email: 'attendee2@example.com' },
-  //     ],
-  //   };
-
-  //   const response = await calendar.events.insert({
-  //     calendarId: 'primary',
-  //     resource: event,
-  //     conferenceDataVersion: 1,
-  //   });
-
-  //   return response.data;
-  // }
 }
